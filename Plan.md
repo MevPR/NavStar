@@ -1,187 +1,191 @@
-# NavStar – Plan für ein autonomes Navigationssystem im Sonnensystem
+# NavStar – Plan for an Autonomous Navigation System in the Solar System
 
-## 1. Aufgabe und Randbedingungen
+## 1. Task and Constraints
 
-Ein Raumgleiter bewegt sich interplanetar im Sonnensystem und muss seine Position
-und Geschwindigkeit jederzeit selbst bestimmen. Es gibt **keine** Unterstützung von
-außen: kein Deep Space Network, kein GNSS, keine Ephemeriden-Updates, keine
-Zeitzeichen von der Erde.
+A spacecraft travels interplanetary space within the solar system and must
+determine its own position and velocity at all times. There is **no** external
+support: no Deep Space Network, no GNSS, no ephemeris updates, no time signals
+from Earth.
 
-Erlaubt ist ausschließlich Wissen, das vor dem Start an Bord geladen wurde – so wie
-eine Seekarte auf einem Schiff:
+Only knowledge loaded onboard before launch may be used – just like a nautical
+chart on a ship:
 
-| Bordwissen                          | Rolle                                                     |
+| Onboard knowledge                   | Role                                                      |
 |-------------------------------------|-----------------------------------------------------------|
-| Sternkatalog                        | Lagebestimmung durch den Sternsensor                      |
-| Planetenephemeriden                 | Position der Planeten als Funktion der Zeit               |
-| Pulsar-Timing-Modelle               | Richtung und Periode von Millisekundenpulsaren            |
-| Physikalische Konstanten, GM-Werte  | Dynamikmodell                                             |
-| Bord-Atomuhr                        | Zeitbasis für Ephemeriden und Pulsar-Timing               |
+| Star catalog                        | Attitude determination by the star tracker                |
+| Planetary ephemerides               | Planet positions as a function of time                    |
+| Pulsar timing models                | Direction and period of millisecond pulsars               |
+| Physical constants, GM values       | Dynamics model                                            |
+| Onboard atomic clock                | Time base for ephemerides and pulsar timing               |
 
-Ziele:
+Goals:
 
-1. Schätzung von Position und Geschwindigkeit im heliozentrischen Inertialsystem
-   EME2000 mit realistischer Unsicherheit (Kovarianz).
-2. Kaltstart ohne jede Vorinformation (Power-up, Safe-Mode-Recovery).
-3. Robustheit gegen Ausreißer und unmodellierte Kräfte.
-4. Verwertung aller verfügbaren Bordsensoren in einem gemeinsamen Schätzer.
-5. Nachvollziehbare Verifikation durch Unit-Tests und eine End-to-End-Simulation.
+1. Estimate position and velocity in the heliocentric inertial frame EME2000
+   with a realistic uncertainty (covariance).
+2. Cold start without any prior information (power-up, safe-mode recovery).
+3. Robustness against outliers and unmodeled forces.
+4. Use of all available onboard sensors in a single common estimator.
+5. Traceable verification through unit tests and an end-to-end simulation.
 
-## 2. Sensorik an Bord
+## 2. Onboard Sensors
 
-| Sensor                          | Messgröße                                      | Typische Genauigkeit (1σ)  | Beitrag zur Navigation                                   |
+| Sensor                          | Measured quantity                              | Typical accuracy (1σ)      | Contribution to navigation                               |
 |---------------------------------|------------------------------------------------|----------------------------|----------------------------------------------------------|
-| Sternsensor (Star Tracker)      | Lage-Quaternion Body → Inertial                | 1–5″                       | Referenz für alle Richtungsmessungen                     |
-| IMU (Gyros, Beschleunigungsmesser) | Drehrate, nicht-gravitative Beschleunigung  | 1e-6 rad/s, 1e-8 km/s²     | Lagefortschreibung, Schubmessung bei Manövern            |
-| Optische Navigationskamera (OpNav) | Richtung zu Planeten vor Sternhintergrund   | 2–10″                      | Haupt-Positionsquelle, Triangulation, Kaltstart          |
-| Sonnensensor                    | Richtung zur Sonne                             | 0,01°                      | Grobe, immer verfügbare Richtung; Kaltstart              |
-| Röntgen-Pulsardetektor (XNAV)   | Ankunftsphase der Pulse von Millisekundenpulsaren | 1–10 µs (0,3–3 km)      | Absolute Position wie ein „galaktisches GPS“              |
-| Solarspektrometer               | Dopplerverschiebung solarer Absorptionslinien  | 1 m/s                      | Radialgeschwindigkeit zur Sonne                          |
-| Radar-/Laser-Altimeter          | Entfernung zur Oberfläche eines Körpers        | 10 m                       | Anflug- und Orbitphase                                   |
-| Bord-Atomuhr                    | Zeit                                           | 1e-13 relative Stabilität  | Zeitbasis für Ephemeriden- und Pulsarauswertung          |
+| Star tracker                    | Attitude quaternion body → inertial            | 1–5″                       | Reference for all direction measurements                 |
+| IMU (gyros, accelerometers)     | Angular rate, non-gravitational acceleration   | 1e-6 rad/s, 1e-8 km/s²     | Attitude propagation, thrust measurement during maneuvers |
+| Optical navigation camera (OpNav) | Direction to planets against the star background | 2–10″                  | Primary position source, triangulation, cold start       |
+| Sun sensor                      | Direction to the Sun                           | 0.01°                      | Coarse, always available direction; cold start           |
+| X-ray pulsar detector (XNAV)    | Arrival phase of pulses from millisecond pulsars | 1–10 µs (0.3–3 km)       | Absolute position like a "galactic GPS"                  |
+| Solar spectrometer              | Doppler shift of solar absorption lines        | 1 m/s                      | Radial velocity relative to the Sun                      |
+| Radar/laser altimeter           | Distance to the surface of a body              | 10 m                       | Approach and orbit phase                                 |
+| Onboard atomic clock            | Time                                           | 1e-13 relative stability   | Time base for ephemeris and pulsar evaluation            |
 
-Alle Messungen werden in Messmodelle übersetzt, die aus dem geschätzten Zustand
-eine Vorhersage berechnen. Die Differenz (Innovation) treibt den Filter.
+All measurements are translated into measurement models that compute a
+prediction from the estimated state. The difference (innovation) drives the
+filter.
 
-## 3. Systemarchitektur
+## 3. System Architecture
 
 ```
- Sternsensor ──► Lage q (Body→Inertial) ───────────────────────────────┐
- IMU ──┬─► Gyro ──► Lagefortschreibung zwischen Sternsensor-Fixes       │
-       └─► Beschleunigung ──► Schub (Body→Inertial) ──► Propagation (RK4 + Kovarianz)
- Kamera ────────► Richtung (Body) ──q──► BearingMeasurement ─┐
- Sonnensensor ──► Richtung (Body) ──q──► BearingMeasurement  │
- Pulsardetektor ──────────────────────► PulsarMeasurement    ├──► EKF-Update (Gating, Joseph-Form) ──► Zustand + Kovarianz
- Spektrometer ────────────────────────► SolarDopplerMeasurement │
- Altimeter ───────────────────────────► RangeMeasurement     ┘
- Bord-Ephemeriden + Pulsarkatalog ────► Messmodelle und Dynamikmodell
+ Star tracker ──► Attitude q (body→inertial) ──────────────────────────┐
+ IMU ──┬─► Gyro ──► Attitude propagation between star tracker fixes    │
+       └─► Acceleration ──► Thrust (body→inertial) ──► Propagation (RK4 + covariance)
+ Camera ────────► Direction (body) ──q──► BearingMeasurement ─┐
+ Sun sensor ────► Direction (body) ──q──► BearingMeasurement  │
+ Pulsar detector ─────────────────────► PulsarMeasurement     ├──► EKF update (gating, Joseph form) ──► State + covariance
+ Spectrometer ────────────────────────► SolarDopplerMeasurement │
+ Altimeter ───────────────────────────► RangeMeasurement      ┘
+ Onboard ephemerides + pulsar catalog ► Measurement models and dynamics model
 ```
 
-Schichten des Swift-Pakets `NavStarCore`:
+Layers of the Swift package `NavStarCore`:
 
-| Schicht        | Ordner                              | Inhalt                                                                  |
+| Layer          | Folder                              | Contents                                                                |
 |----------------|-------------------------------------|-------------------------------------------------------------------------|
-| Mathematik     | `Sources/NavStarCore/Math`          | `Vector3`, `Matrix3`, `Matrix` (n×m, Inverse), `Quaternion`             |
-| Zeit           | `Sources/NavStarCore/Time`          | `Epoch` (Sekunden seit J2000, Julianisches Datum, Kalender)             |
-| Ephemeriden    | `Sources/NavStarCore/Ephemeris`     | `CelestialBody`, `Kepler`, `OnboardEphemeris` (JPL-Näherungselemente)   |
-| Dynamik        | `Sources/NavStarCore/Dynamics`      | `DynamicsModel` (Sonne + Planeten, Gravitationsgradient), RK4-Integrator |
-| Messmodelle    | `Sources/NavStarCore/Measurements`  | `NavigationMeasurement`-Protokoll, Bearing, Pulsar, Doppler, Range      |
-| Sensoren       | `Sources/NavStarCore/Sensors`       | Sensormodelle für die Simulation (im Flug: Hardwaretreiber)             |
-| Schätzung      | `Sources/NavStarCore/Estimation`    | `NavigationState`, `ExtendedKalmanFilter`, `InitialFix` (Kaltstart)     |
-| Navigation     | `Sources/NavStarCore/Navigation`    | `Navigator` – Fassade mit Lage, Filter und Messungs-Adaptern            |
-| Simulation     | `Sources/NavStarSim`                | Executable `navstar-sim`: Wahrheitsmodell, Sensoren, Auswertung         |
-| Tests          | `Tests/NavStarCoreTests`            | 24 Unit-Tests                                                           |
+| Math           | `Sources/NavStarCore/Math`          | `Vector3`, `Matrix3`, `Matrix` (n×m, inverse), `Quaternion`             |
+| Time           | `Sources/NavStarCore/Time`          | `Epoch` (seconds since J2000, Julian date, calendar)                    |
+| Ephemerides    | `Sources/NavStarCore/Ephemeris`     | `CelestialBody`, `Kepler`, `OnboardEphemeris` (JPL approximate elements) |
+| Dynamics       | `Sources/NavStarCore/Dynamics`      | `DynamicsModel` (Sun + planets, gravity gradient), RK4 integrator       |
+| Measurements   | `Sources/NavStarCore/Measurements`  | `NavigationMeasurement` protocol, bearing, pulsar, Doppler, range       |
+| Sensors        | `Sources/NavStarCore/Sensors`       | Sensor models for the simulation (in flight: hardware drivers)          |
+| Estimation     | `Sources/NavStarCore/Estimation`    | `NavigationState`, `ExtendedKalmanFilter`, `InitialFix` (cold start)    |
+| Navigation     | `Sources/NavStarCore/Navigation`    | `Navigator` – facade with attitude, filter and measurement adapters     |
+| Simulation     | `Sources/NavStarSim`                | Executable `navstar-sim`: truth model, sensors, evaluation              |
+| Tests          | `Tests/NavStarCoreTests`            | 24 unit tests                                                           |
 
-Design-Entscheidungen:
+Design decisions:
 
-- **Referenzsystem** EME2000 heliozentrisch. Die gespeicherten Keplerelemente
-  liegen in der Ekliptik J2000 vor und werden mit der Schiefe der Ekliptik
-  gedreht. Pulsarrichtungen (ICRF) sind damit direkt verwendbar.
-- **Ephemeriden als Protokoll** (`Ephemeris`): Die analytische Bordephemeride ist
-  austauschbar gegen hochgenaue Chebyshev-Koeffizienten (JPL DE440), ohne den
-  Rest des Systems zu ändern.
-- **Messungen als Protokoll** (`NavigationMeasurement`): Jede Messung liefert
-  Residuum, Jacobi-Matrix und Rauschkovarianz. Neue Sensoren werden durch eine
-  neue Struktur hinzugefügt, der Filter bleibt unverändert.
-- **Trennung Wahrheit/Schätzung**: Die Sensormodelle in `Sensors` erzeugen aus
-  dem wahren Zustand Messungen; der Filter sieht die Wahrheit nie.
+- **Reference frame** heliocentric EME2000. The stored Keplerian elements are
+  given in the J2000 ecliptic and are rotated by the obliquity of the ecliptic.
+  Pulsar directions (ICRF) can therefore be used directly.
+- **Ephemerides as a protocol** (`Ephemeris`): the analytic onboard ephemeris
+  can be replaced by high-precision Chebyshev coefficients (JPL DE440) without
+  changing the rest of the system.
+- **Measurements as a protocol** (`NavigationMeasurement`): every measurement
+  provides a residual, Jacobian and noise covariance. New sensors are added as
+  a new struct; the filter remains unchanged.
+- **Separation of truth and estimate**: the sensor models in `Sensors` generate
+  measurements from the true state; the filter never sees the truth.
 
-## 4. Mathematische Grundlagen
+## 4. Mathematical Foundations
 
-### 4.1 Zustand
+### 4.1 State
 
-x = [r, v, a_b] mit r ∈ ℝ³ (km), v ∈ ℝ³ (km/s) und a_b ∈ ℝ³ (km/s²), dem
-unmodellierten Beschleunigungsbias (Strahlungsdruck-Fehlmodellierung, Ausgasung,
-Triebwerkslecks). Insgesamt 9 Zustände mit 9×9-Kovarianz P.
+x = [r, v, a_b] with r ∈ ℝ³ (km), v ∈ ℝ³ (km/s) and a_b ∈ ℝ³ (km/s²), the
+unmodeled acceleration bias (radiation pressure mismodeling, outgassing,
+thruster leaks). 9 states in total with a 9×9 covariance P.
 
-### 4.2 Dynamik
+### 4.2 Dynamics
 
-r̈ = −μ☉ r/|r|³ + Σᵢ μᵢ ( dᵢ/|dᵢ|³ − pᵢ/|pᵢ|³ ) + a_schub + a_b,  dᵢ = pᵢ − r
+r̈ = −μ☉ r/|r|³ + Σᵢ μᵢ ( dᵢ/|dᵢ|³ − pᵢ/|pᵢ|³ ) + a_thrust + a_b,  dᵢ = pᵢ − r
 
-ȧ_b = −a_b/τ + w (Gauss-Markov-Prozess erster Ordnung, τ = 10 Tage)
+ȧ_b = −a_b/τ + w (first-order Gauss–Markov process, τ = 10 days)
 
-- Direkte und indirekte Terme aller acht Planeten (Erde als Erde-Mond-Baryzentrum).
-- Schub a_schub kommt aus den Beschleunigungsmessern, gedreht mit der Lage aus
-  dem Sternsensor.
-- Integration mit RK4 (Schrittweite ≤ 120 s), Kovarianz mit
-  Φ ≈ I + FΔt + (FΔt)²/2 und analytischem Gravitationsgradienten
+- Direct and indirect terms of all eight planets (Earth as the Earth–Moon
+  barycenter).
+- Thrust a_thrust comes from the accelerometers, rotated with the attitude from
+  the star tracker.
+- Integration with RK4 (step size ≤ 120 s), covariance with
+  Φ ≈ I + FΔt + (FΔt)²/2 and the analytic gravity gradient
   ∂a/∂r = Σ μ (3 d dᵀ/|d|⁵ − I/|d|³).
 
-### 4.3 Messgleichungen
+### 4.3 Measurement Equations
 
-| Messung           | Modell h(x)                                                       | Besonderheiten                                                      |
+| Measurement       | Model h(x)                                                        | Notes                                                               |
 |-------------------|-------------------------------------------------------------------|---------------------------------------------------------------------|
-| Richtung (OpNav, Sonne) | u = (p(t−τ) − r)/ρ, dann Aberration u' = norm(u + v/c)      | Lichtlaufzeit τ iterativ; Residuum als zwei Winkel in der Tangentialebene; ∂u/∂r = −(I − uuᵀ)/ρ |
-| Pulsar (XNAV)     | Δt = n·(r − r_SSB)/c  mod P                                       | Baryzentrumskorrektur aus Ephemeriden; Zyklus-Mehrdeutigkeit wird nur aufgelöst, wenn σ entlang n < cP/6 |
-| Solar-Doppler     | v_r = v · r̂                                                       | ∂/∂r = vᵀ(I − r̂r̂ᵀ)/|r|, ∂/∂v = r̂ᵀ                                   |
-| Altimeter         | ρ = |p − r| − R_Körper                                             | ∂/∂r = −uᵀ                                                          |
+| Bearing (OpNav, Sun) | u = (p(t−τ) − r)/ρ, then aberration u' = norm(u + v/c)         | Light time τ solved iteratively; residual as two angles in the tangent plane; ∂u/∂r = −(I − uuᵀ)/ρ |
+| Pulsar (XNAV)     | Δt = n·(r − r_SSB)/c  mod P                                       | Barycentric correction from ephemerides; cycle ambiguity is only resolved when σ along n < cP/6 |
+| Solar Doppler     | v_r = v · r̂                                                       | ∂/∂r = vᵀ(I − r̂r̂ᵀ)/|r|, ∂/∂v = r̂ᵀ                                   |
+| Altimeter         | ρ = |p − r| − R_body                                              | ∂/∂r = −uᵀ                                                          |
 
 ### 4.4 Filter
 
-Erweiterter Kalman-Filter (EKF):
+Extended Kalman filter (EKF):
 
-- Prädiktion: x ← f(x), P ← Φ P Φᵀ + Q mit weißem Beschleunigungsrauschen
-  für (r, v) und Antriebsrauschen 2σ_b²/τ für den Bias.
-- Update: S = H P Hᵀ + R, K = P Hᵀ S⁻¹, x ← x + K y, P in Joseph-Form
-  (I − KH) P (I − KH)ᵀ + K R Kᵀ für numerische Positivität.
-- Gating: Messungen mit normierter Innovation > 5σ werden verworfen und protokolliert.
-- Messungen aus der Zukunft lösen automatisch eine Propagation aus, veraltete
-  Messungen werden abgelehnt.
+- Prediction: x ← f(x), P ← Φ P Φᵀ + Q with white acceleration noise for
+  (r, v) and driving noise 2σ_b²/τ for the bias.
+- Update: S = H P Hᵀ + R, K = P Hᵀ S⁻¹, x ← x + K y, P in Joseph form
+  (I − KH) P (I − KH)ᵀ + K R Kᵀ for numerical positivity.
+- Gating: measurements with a normalized innovation > 5σ are rejected and
+  logged.
+- Measurements from the future automatically trigger a propagation; stale
+  measurements are rejected.
 
-### 4.5 Kaltstart
+### 4.5 Cold Start
 
-1. Gewichtete Least-Squares-Triangulation aus ≥ 2 Richtungen: Jede Richtung
-   definiert eine Gerade durch die (lichtlaufzeitkorrigierte) Körperposition,
-   gesucht ist der Punkt minimaler gewichteter Abstandsquadratsumme. Die Gewichte
-   1/(σ·ρ)² werden iterativ aus der geschätzten Entfernung bestimmt; die Inverse
-   der Normalmatrix liefert direkt die Positionskovarianz.
-2. Zwei Fixes im Abstand von Stunden; die Geschwindigkeit wird durch Shooting
-   bestimmt (Anfangsgeschwindigkeit so korrigieren, dass die propagierte Bahn den
-   zweiten Fix trifft), wodurch die Bahnkrümmung berücksichtigt ist.
-3. Mit der gefundenen Geschwindigkeit wird die Aberration exakt invertiert und
-   die Prozedur wiederholt.
+1. Weighted least-squares triangulation from ≥ 2 directions: each direction
+   defines a line through the (light-time corrected) body position; the sought
+   point minimizes the weighted sum of squared distances. The weights
+   1/(σ·ρ)² are determined iteratively from the estimated range; the inverse of
+   the normal matrix directly yields the position covariance.
+2. Two fixes several hours apart; the velocity is determined by shooting
+   (correcting the initial velocity so that the propagated trajectory hits the
+   second fix), which accounts for the curvature of the trajectory.
+3. With the velocity found, the aberration is inverted exactly and the
+   procedure is repeated.
 
-## 5. Betriebsmodi
+## 5. Operating Modes
 
-| Modus        | Auslöser                               | Verhalten                                                                  |
+| Mode         | Trigger                                | Behavior                                                                   |
 |--------------|----------------------------------------|----------------------------------------------------------------------------|
-| Kaltstart    | Power-up, Verlust des Filterzustands   | Sternsensor → Lage; Kamera + Sonnensensor → Triangulation; Filter neu setzen |
-| Cruise       | Normalbetrieb                          | Propagation mit IMU-Lage; OpNav alle 6 h, Sonnensensor stündlich, XNAV alle 12 h, Doppler alle 6 h |
-| Manöver      | Beschleunigung über Schwellwert        | Beschleunigungsmesser liefern Schub in die Dynamik                         |
-| Anflug       | Zielkörper < 50 000 km                 | Altimeter aktiv, OpNav auf Zielkörper verdichtet                           |
-| Safe Mode    | Filterinkonsistenz (NEES-Test)         | Kovarianz aufweiten oder Kaltstart                                         |
+| Cold start   | Power-up, loss of filter state         | Star tracker → attitude; camera + Sun sensor → triangulation; reset filter |
+| Cruise       | Normal operation                       | Propagation with IMU attitude; OpNav every 6 h, Sun sensor hourly, XNAV every 12 h, Doppler every 6 h |
+| Maneuver     | Acceleration above threshold           | Accelerometers feed thrust into the dynamics                               |
+| Approach     | Target body < 50,000 km                | Altimeter active, OpNav densified on the target body                       |
+| Safe mode    | Filter inconsistency (NEES test)       | Inflate covariance or cold start                                           |
 
-## 6. Implementierungsplan
+## 6. Implementation Plan
 
-| Phase | Inhalt                                                                  | Status |
+| Phase | Contents                                                                | Status |
 |-------|-------------------------------------------------------------------------|--------|
-| 0     | Repository, Swift-Package, Verzeichnisstruktur                          | ✅ |
-| 1     | Vektoren, Matrizen, Quaternionen, Zeitrechnung                          | ✅ |
-| 2     | Bordephemeride (JPL-Näherungselemente 1800–2050), Kepler-Löser, Baryzentrum | ✅ |
-| 3     | Dynamikmodell (Sonne + 8 Planeten), RK4, Gravitationsgradient           | ✅ |
-| 4     | Messmodelle: Richtung, Pulsar, Doppler, Altimeter                       | ✅ |
-| 5     | EKF mit 9 Zuständen, Gating, Joseph-Form; Kaltstart                     | ✅ |
-| 6     | Sensormodelle und End-to-End-Simulation Erde → interplanetar (30 Tage)  | ✅ |
-| 7     | Unit-Tests (Mathematik, Ephemeriden, Jacobi-Matrizen, Filterkonsistenz) | ✅ |
-| 8     | Erweiterungen (siehe Abschnitt 9)                                       | ⬜ |
+| 0     | Repository, Swift package, directory structure                          | ✅ |
+| 1     | Vectors, matrices, quaternions, time computation                        | ✅ |
+| 2     | Onboard ephemeris (JPL approximate elements 1800–2050), Kepler solver, barycenter | ✅ |
+| 3     | Dynamics model (Sun + 8 planets), RK4, gravity gradient                 | ✅ |
+| 4     | Measurement models: bearing, pulsar, Doppler, altimeter                 | ✅ |
+| 5     | EKF with 9 states, gating, Joseph form; cold start                      | ✅ |
+| 6     | Sensor models and end-to-end simulation Earth → interplanetary (30 days) | ✅ |
+| 7     | Unit tests (math, ephemerides, Jacobians, filter consistency)           | ✅ |
+| 8     | Extensions (see section 9)                                              | ⬜ |
 
-## 7. Verifikation
+## 7. Verification
 
-### 7.1 Unit-Tests (`swift test`, 24 Tests)
+### 7.1 Unit Tests (`swift test`, 24 tests)
 
-- Matrixinversion, Quaternion-Rotation und Gyro-Integration, Tangentialbasis, Phasenwrapping.
-- Kalenderumrechnung (J2000, Schaltjahr), Kepler-Löser bis e = 0,99.
-- Erde bei J2000: heliozentrische Länge 100,4°, Abstand 0,9833 AU; Planetenabstände in Bahngrenzen; Baryzentrumsversatz.
-- Kreisbahn schließt nach einer Periode auf < 1 km; Gravitationsgradient gegen finite Differenzen.
-- Jacobi-Matrizen aller Messmodelle gegen finite Differenzen; Pulsar-Wrapping und Mehrdeutigkeitsablehnung.
-- Triangulation ohne Rauschen < 0,5 km; Kaltstart-Geschwindigkeit < 0,1 m/s; Filterkonsistenz (Fehler < 4σ); Ablehnung veralteter Messungen.
+- Matrix inversion, quaternion rotation and gyro integration, tangent basis, phase wrapping.
+- Calendar conversion (J2000, leap year), Kepler solver up to e = 0.99.
+- Earth at J2000: heliocentric longitude 100.4°, distance 0.9833 AU; planet distances within orbital limits; barycenter offset.
+- Circular orbit closes after one period to < 1 km; gravity gradient against finite differences.
+- Jacobians of all measurement models against finite differences; pulsar wrapping and ambiguity rejection.
+- Noise-free triangulation < 0.5 km; cold-start velocity < 0.1 m/s; filter consistency (error < 4σ); rejection of stale measurements.
 
-### 7.2 End-to-End-Simulation (`swift run -c release navstar-sim`)
+### 7.2 End-to-End Simulation (`swift run -c release navstar-sim`)
 
-Szenario: Start am 1.11.2026 nahe der Erde mit 3 km/s Überschuss, 30 Tage Flug,
-unmodellierte Beschleunigung 9e-11 km/s², Beschleunigungsmesser-Bias,
-Mid-Course-Burn an Tag 15. Die Wahrheit wird mit demselben Dynamikmodell plus
-Störungen erzeugt; alle Messungen sind verrauscht und laufen über Sternsensor-Lage.
+Scenario: start on 2026-11-01 near Earth with 3 km/s excess velocity, 30 days of
+flight, unmodeled acceleration 9e-11 km/s², accelerometer bias, mid-course burn
+on day 15. The truth is generated with the same dynamics model plus
+perturbations; all measurements are noisy and go through the star tracker
+attitude.
 
 ```text
 NavStar autonomous navigation simulation
@@ -242,50 +246,51 @@ Estimated acceleration bias (2.46943e-11, -3.23387e-11, 3.05683e-11) km/s² (tru
 
 Interpretation:
 
-- Der Kaltstart ohne jedes Vorwissen liefert eine Position auf ca. 70 000 km
-  (3σ-konsistent); die Unsicherheit liegt vor allem entlang der Sichtlinie zur Erde.
-- Doppler und Richtungsmessungen bringen den Fehler innerhalb einer Woche auf
-  wenige 100 km.
-- Sobald die Unsicherheit entlang einer Pulsarrichtung unter ein Sechstel der
-  Mehrdeutigkeitsstrecke fällt (ab Tag 10), werden die XNAV-Messungen akzeptiert
-  und die Position springt auf wenige km.
-- Der Beschleunigungsbias wird mitgeschätzt; dadurch bleibt die Kovarianz
-  konsistent und kein Pulsar-Update wird fälschlich verworfen.
+- The cold start without any prior knowledge yields a position to about
+  70,000 km (3σ consistent); the uncertainty lies mainly along the line of
+  sight to Earth.
+- Doppler and bearing measurements reduce the error to a few 100 km within a
+  week.
+- As soon as the uncertainty along a pulsar direction drops below one sixth of
+  the ambiguity distance (from day 10), the XNAV measurements are accepted and
+  the position error drops to a few km.
+- The acceleration bias is estimated as well; this keeps the covariance
+  consistent and no pulsar update is wrongly rejected.
 
-## 8. Fehlerbudget und Risiken
+## 8. Error Budget and Risks
 
-| Risiko                                   | Auswirkung                                     | Maßnahme                                                     |
+| Risk                                     | Impact                                         | Mitigation                                                   |
 |------------------------------------------|------------------------------------------------|--------------------------------------------------------------|
-| Genauigkeit der analytischen Ephemeride  | Systematische Fehler bis einige 10 000 km bei Planetenpositionen (JPL-Näherung: 20–40″) | Vor dem Flug DE440-Chebyshev-Koeffizienten laden; `Ephemeris`-Protokoll ist dafür vorbereitet. In der Simulation ist dieser Fehler nicht sichtbar, weil Wahrheit und Filter dieselbe Ephemeride nutzen. |
-| Erde–Mond-Trennung                       | EMB statt Erde: bis 4 700 km Versatz           | Mondephemeride ergänzen (Phase 8)                            |
-| Pulsar-Mehrdeutigkeit                    | Falscher Zyklus = Fehler von Hunderten km      | Nur akzeptieren, wenn σ < cP/6; 5σ-Gating                     |
-| Sonnenausschluss der Kamera              | Keine OpNav in Sonnennähe                      | Sonnensensor, Pulsare und Doppler überbrücken                |
-| Uhrdrift                                 | Pulsar-Timing und Ephemeridenzeit driften      | Uhrbias und -drift als Zustände (Phase 8)                    |
-| Lagefehler                               | Jeder Lagefehler wird zum Richtungsfehler      | Sternsensor-σ in das Messrauschen eingerechnet               |
-| Unmodellierte Kräfte                     | Filterdivergenz                                | Gauss-Markov-Biaszustand; Prozessrauschen                    |
-| Nichtlinearität bei schlechtem Prior     | EKF-Linearisierung ungültig                    | Kaltstart liefert Prior mit korrekter Kovarianz; alternativ UKF |
+| Accuracy of the analytic ephemeris       | Systematic errors of up to several 10,000 km in planet positions (JPL approximation: 20–40″) | Load DE440 Chebyshev coefficients before flight; the `Ephemeris` protocol is prepared for this. In the simulation this error is not visible because truth and filter use the same ephemeris. |
+| Earth–Moon separation                    | EMB instead of Earth: up to 4,700 km offset    | Add a lunar ephemeris (phase 8)                              |
+| Pulsar ambiguity                         | Wrong cycle = error of hundreds of km          | Accept only when σ < cP/6; 5σ gating                         |
+| Camera Sun exclusion                     | No OpNav near the Sun                          | Sun sensor, pulsars and Doppler bridge the gap               |
+| Clock drift                              | Pulsar timing and ephemeris time drift         | Clock bias and drift as states (phase 8)                     |
+| Attitude error                           | Every attitude error becomes a direction error | Star tracker σ included in the measurement noise             |
+| Unmodeled forces                         | Filter divergence                              | Gauss–Markov bias state; process noise                       |
+| Nonlinearity with a poor prior           | EKF linearization invalid                      | Cold start provides a prior with correct covariance; alternatively UKF |
 
-## 9. Erweiterungen (Phase 8)
+## 9. Extensions (Phase 8)
 
-1. **Hochgenaue Ephemeride**: JPL DE440 als Chebyshev-Koeffizienten an Bord, inkl. Mond und großer Asteroiden.
-2. **Uhrzustände**: Bias und Drift der Bordatomuhr im Filter, geschätzt über Pulsar-Timing.
-3. **Lagefilter**: Multiplikativer EKF (MEKF) für Lage und Gyro-Bias statt reiner Sternsensor-Übernahme.
-4. **Sensorbias**: Beschleunigungsmesser-Bias und Skalenfaktor als Zustände während Manövern.
-5. **Relativnavigation**: Landmarken- und Horizontverfolgung beim Anflug, Monde als OpNav-Ziele.
-6. **Square-Root- oder UD-Filter** für numerische Robustheit auf Flugrechnern.
-7. **Monte-Carlo-Kampagne** und NEES/NIS-Konsistenzstatistik über viele Seeds.
-8. **Flugsoftware-Integration**: Echtzeit-Scheduling, Zeitstempelung der Rohdaten, Telemetrie der Filterzustände.
+1. **High-precision ephemeris**: JPL DE440 as Chebyshev coefficients onboard, including the Moon and large asteroids.
+2. **Clock states**: bias and drift of the onboard atomic clock in the filter, estimated via pulsar timing.
+3. **Attitude filter**: multiplicative EKF (MEKF) for attitude and gyro bias instead of directly adopting the star tracker solution.
+4. **Sensor bias**: accelerometer bias and scale factor as states during maneuvers.
+5. **Relative navigation**: landmark and horizon tracking during approach, moons as OpNav targets.
+6. **Square-root or UD filter** for numerical robustness on flight computers.
+7. **Monte Carlo campaign** and NEES/NIS consistency statistics over many seeds.
+8. **Flight software integration**: real-time scheduling, time-tagging of raw data, telemetry of filter states.
 
-## 10. Nutzung
+## 10. Usage
 
 ```bash
-swift build                          # Debug-Build
-swift test                           # 24 Unit-Tests
-swift run -c release navstar-sim     # 30-Tage-Simulation
-open Package.swift                   # in Xcode öffnen
+swift build                          # debug build
+swift test                           # 24 unit tests
+swift run -c release navstar-sim     # 30-day simulation
+open Package.swift                   # open in Xcode
 ```
 
-Minimale Einbindung des Navigators:
+Minimal integration of the navigator:
 
 ```swift
 import NavStarCore

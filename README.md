@@ -1,24 +1,25 @@
 # NavStar
 
-Autonomes Navigationssystem für einen Raumgleiter im Sonnensystem, das
-ausschließlich bordeigene Sensoren nutzt: Sternsensor, IMU, optische
-Navigationskamera, Sonnensensor, Röntgen-Pulsardetektor (XNAV),
-Solarspektrometer (Doppler) und Altimeter. Keine Funkortung, kein GNSS, keine
-Daten von der Erde – nur vor dem Start geladenes Bordwissen (Sternkatalog,
-Planetenephemeriden, Pulsarkatalog).
+Autonomous navigation system for a spacecraft in the solar system that relies
+exclusively on onboard sensors: star tracker, IMU, optical navigation camera,
+Sun sensor, X-ray pulsar detector (XNAV), solar spectrometer (Doppler) and
+altimeter. No radio tracking, no GNSS, no data from Earth – only onboard
+knowledge loaded before launch (star catalog, planetary ephemerides, pulsar
+catalog).
 
-Der vollständige Entwurf, die Mathematik, das Fehlerbudget und der
-Implementierungsplan stehen in [Plan.md](Plan.md).
+The complete design, the mathematics, the error budget and the implementation
+plan are described in [Plan.md](Plan.md).
 
-## Aufbau
+## Structure
 
-- `Sources/NavStarCore` – Bibliothek: Mathematik, Zeit, Ephemeriden, Dynamik,
-  Messmodelle, Sensormodelle, Kalman-Filter mit Kaltstart, `Navigator`-Fassade.
-- `Sources/NavStarSim` – Executable `navstar-sim`: 30-Tage-Simulation mit
-  Wahrheitsmodell, verrauschten Sensoren und Fehlerauswertung.
-- `Tests/NavStarCoreTests` – 24 Unit-Tests.
+- `Sources/NavStarCore` – library: math, time, ephemerides, dynamics,
+  measurement models, sensor models, Kalman filter with cold start, `Navigator`
+  facade.
+- `Sources/NavStarSim` – executable `navstar-sim`: 30-day simulation with a
+  truth model, noisy sensors and error evaluation.
+- `Tests/NavStarCoreTests` – 24 unit tests.
 
-## Verwendung
+## Usage
 
 ```bash
 swift build
@@ -26,16 +27,17 @@ swift test
 swift run -c release navstar-sim
 ```
 
-Das Paket lässt sich direkt in Xcode öffnen (`Package.swift`).
+The package can be opened directly in Xcode (`Package.swift`).
 
-## Kurzüberblick der Methode
+## Method at a glance
 
-1. Der Sternsensor liefert die Lage, die IMU schreibt sie fort und misst Schub.
-2. Kamera und Sonnensensor liefern Richtungen zu Sonne und Planeten; aus mehreren
-   Richtungen wird per gewichteter Triangulation ein Kaltstart-Fix bestimmt.
-3. Ein erweiterter Kalman-Filter mit 9 Zuständen (Position, Geschwindigkeit,
-   Beschleunigungsbias) propagiert mit einem N-Körper-Modell und verarbeitet
-   Richtungs-, Pulsar-, Doppler- und Entfernungsmessungen mit Lichtlaufzeit-
-   und Aberrationskorrektur.
-4. Pulsarmessungen werden erst verwendet, wenn die Positionsunsicherheit die
-   Zyklus-Mehrdeutigkeit zulässt; danach erreicht die Lösung km-Genauigkeit.
+1. The star tracker provides the attitude; the IMU propagates it and measures
+   thrust.
+2. The camera and Sun sensor provide directions to the Sun and the planets; a
+   cold-start fix is computed from several directions by weighted triangulation.
+3. An extended Kalman filter with 9 states (position, velocity, acceleration
+   bias) propagates with an N-body model and processes bearing, pulsar, Doppler
+   and range measurements with light-time and aberration correction.
+4. Pulsar measurements are only used once the position uncertainty allows the
+   cycle ambiguity to be resolved; after that the solution reaches km-level
+   accuracy.
