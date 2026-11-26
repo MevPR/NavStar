@@ -41,3 +41,7 @@ The package can be opened directly in Xcode (`Package.swift`).
 4. Pulsar measurements are only used once the position uncertainty allows the
    cycle ambiguity to be resolved; after that the solution reaches km-level
    accuracy.
+
+## License
+
+NavStar is released under the [MIT License](LICENSE).
